@@ -1,4 +1,4 @@
-# Durable State Machine Workflow 🛡️
+# Durable State Machine Workflow 
 
 [![CI](https://github.com/Kundanikapradhan/durable-state-machine/actions/workflows/ci.yml/badge.svg)](https://github.com/Kundanikapradhan/durable-state-machine/actions)
 [![Python](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
@@ -13,7 +13,7 @@ Built to solve the critical flaw of naive `while True` scripts: **unhandled proc
 
 ---
 
-## 🎯 Architecture Overview
+## Architecture Overview
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,7 @@ flowchart TD
 
 ---
 
-## ☠️ Dead Letter Queue (DLQ) & Poison Pill Isolation
+## Dead Letter Queue (DLQ) & Poison Pill Isolation
 
 In production data pipelines, **retries alone are not enough**. If record `#9421` contains invalid UTF-8 or a corrupted foreign key, retrying 5 times will simply fail 5 times, blocking the entire 4-hour migration forever.
 
@@ -106,7 +106,7 @@ For optional pipeline stages (e.g. non-critical customer demographic enrichment)
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 Clone the repo and run the automated crash-and-recovery test:
 
@@ -158,7 +158,7 @@ python3 demo_crash_and_recover.py
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 durable-state-machine/
@@ -179,7 +179,7 @@ durable-state-machine/
 
 ---
 
-## 🧪 Running Unit Tests
+## Running Unit Tests
 
 Run the full suite covering checkpoint serialization, jitter bounds, crash-skipping, and DLQ quarantine:
 
@@ -189,7 +189,7 @@ python3 -m unittest discover tests
 
 ---
 
-## 🧠 Framework Comparison: Temporal vs. LangGraph
+## Framework Comparison: Temporal vs. LangGraph
 
 | Feature | Temporal | LangGraph |
 | :--- | :--- | :--- |
@@ -201,22 +201,5 @@ python3 -m unittest discover tests
 | **Hosting** | Temporal Cloud or Self-hosted Temporal Server (Go) | Embedded Python library or LangGraph Cloud |
 
 ---
-
-## 💼 Interview Talking Points & System Design
-
-Use this project to showcase senior engineering principles in backend or AI interviews:
-
-1. **How do you handle non-recoverable poison pill records?**  
-   *We distinguish transient network drops from deterministic data corruption. Transient drops trigger exponential backoff with full jitter. If max retry attempts are exceeded, the failure is shunted to a dedicated SQLite `dead_letter_queue` table capturing the failed payload, error message, and traceback. This isolates the poison pill and alerts on-call engineers without blocking the entire pipeline.*
-
-2. **Why not just use Celery or a Cron job?**  
-   *Celery and Cron handle task queues and scheduling, but lack native durable state machines. If a Celery worker dies during hour 3 of a 4-hour job, it loses all in-memory progress and must restart from scratch. Our durable state machine uses checkpoints to ensure deterministic recovery from the exact step that failed.*
-
-3. **How is idempotency preserved upon retry?**  
-   *All batch writes use upserts (`ON CONFLICT DO UPDATE`) keyed on deterministic composite partition tokens. If a worker crashes right after writing to the database but before committing the checkpoint, re-running that batch produces zero duplicate records.*
-
----
-
-## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
