@@ -151,6 +151,42 @@ class TestDurableEngine(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["step_name"], "optional_enrichment")
 
+    def test_graceful_shutdown_on_sigterm(self):
+        """Verifies that an incoming SIGTERM allows the active step to commit and safely pauses."""
+        workflow_id = "wf-sigterm-test"
+        executed_steps = []
+
+        def step_1(state):
+            executed_steps.append("step_1")
+            # Simulate Kubernetes sending SIGTERM while step 1 is executing
+            wf._shutdown_requested = True
+            return {"step_1_done": True}
+
+        def step_2(state):
+            executed_steps.append("step_2")
+            return {"step_2_done": True}
+
+        wf = DurableWorkflow("SigtermWorkflow", checkpointer=self.store)
+        wf.add_step("step_1", step_1)
+        wf.add_step("step_2", step_2)
+
+        # Run 1: Receives SIGTERM during step 1
+        result1 = wf.execute(workflow_id, {})
+        self.assertTrue(result1.get("_graceful_shutdown"))
+        self.assertEqual(result1.get("_shutdown_at_step"), "step_1")
+        self.assertEqual(executed_steps, ["step_1"])
+
+        # Verify step_1 was committed to checkpoint store
+        latest_step, state, completed = self.store.load_latest_state(workflow_id)
+        self.assertEqual(latest_step, "step_1")
+        self.assertIn("step_1", completed)
+
+        # Run 2: Simulates container reboot (new pod instance)
+        wf._shutdown_requested = False
+        result2 = wf.execute(workflow_id, {})
+        self.assertTrue(result2.get("step_2_done"))
+        self.assertEqual(executed_steps, ["step_1", "step_2"])
+
 
 if __name__ == "__main__":
     unittest.main()

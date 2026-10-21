@@ -17,6 +17,8 @@ import time
 import random
 import logging
 import traceback
+import signal
+import sys
 from typing import Callable, Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -279,6 +281,25 @@ class DurableWorkflow:
         self.steps: Dict[str, WorkflowStep] = {}
         self.step_order: List[str] = []
         self.checkpointer = checkpointer or CheckpointStore()
+        self._shutdown_requested = False
+        self._register_signal_handlers()
+
+    def _register_signal_handlers(self):
+        """Registers OS signal listeners for Kubernetes SIGTERM (graceful pod termination) and SIGINT."""
+        def _handle_signal(signum, frame):
+            sig_name = "SIGTERM" if signum == signal.SIGTERM else ("SIGINT" if signum == signal.SIGINT else str(signum))
+            logger.warning(
+                f"🛑 [OS Signal {sig_name} Received] Container termination initiated by orchestrator. "
+                "Allowing active step to commit checkpoint before graceful exit..."
+            )
+            self._shutdown_requested = True
+
+        try:
+            signal.signal(signal.SIGTERM, _handle_signal)
+            signal.signal(signal.SIGINT, _handle_signal)
+        except (ValueError, AttributeError):
+            # Non-main thread or unsupported environment
+            pass
 
     def add_step(
         self,
@@ -319,6 +340,14 @@ class DurableWorkflow:
 
         # 2. Iterate through DAG steps
         for step_name in self.step_order:
+            if self._shutdown_requested:
+                logger.warning(
+                    f"🛑 [SIGTERM Graceful Exit] Aborting start of step '{step_name}'. "
+                    f"Workflow '{workflow_id}' paused cleanly for container restart."
+                )
+                state["_graceful_shutdown"] = True
+                return state
+
             if step_name in completed_steps:
                 logger.debug(f"Step '{step_name}' already completed. Skipping.")
                 continue
@@ -351,6 +380,15 @@ class DurableWorkflow:
                     )
                     step_succeeded = True
                     logger.info(f"✅ [Step Completed & Checkpointed] '{step_name}' (Attempt {attempt})")
+
+                    if self._shutdown_requested:
+                        logger.warning(
+                            f"🛑 [SIGTERM Graceful Exit] Step '{step_name}' committed to SQLite WAL. "
+                            f"Workflow '{workflow_id}' paused cleanly for container restart."
+                        )
+                        state["_graceful_shutdown"] = True
+                        state["_shutdown_at_step"] = step_name
+                        return state
 
                 except Exception as ex:
                     logger.warning(f"⚠️  [Error in Step '{step_name}'] Attempt {attempt}/{policy.max_attempts}: {str(ex)}")

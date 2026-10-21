@@ -1,0 +1,30 @@
+services:
+  # The primary long-running migration worker
+  workflow-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: durable-migration-worker
+    restart: unless-stopped
+    # 30-second graceful termination window for Kubernetes / Docker SIGTERM handling
+    stop_grace_period: 30s
+    volumes:
+      - checkpoint_data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["python3", "migration_workflow.py", "--db-path", "/app/data/checkpoints.db"]
+
+  # Ad-hoc status inspection tool: run with `docker compose run --rm status-check`
+  status-check:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - checkpoint_data:/app/data
+    command: ["python3", "migration_workflow.py", "--db-path", "/app/data/checkpoints.db", "--status"]
+    profiles:
+      - tools
+
+volumes:
+  checkpoint_data:
+    name: durable_workflow_checkpoints

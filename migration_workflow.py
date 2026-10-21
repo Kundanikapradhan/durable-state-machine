@@ -382,5 +382,8 @@ if __name__ == "__main__":
     }
     
     result = wf.execute(args.workflow_id, initial_state)
+    if result.get("_graceful_shutdown"):
+        print(f"\n[Shutdown] Workflow '{args.workflow_id}' safely paused at step '{result.get('_shutdown_at_step')}'. Exiting gracefully (0).")
+        sys.exit(0)
     success = result.get("migration_completed") or result.get("dry_run_verified")
-    print(f"\n🏁 Execution Finished: {'SUCCESS 🚀' if success else 'FAILED ❌'}")
+    print(f"\nExecution Finished: {'SUCCESS' if success else 'FAILED'}")

@@ -61,7 +61,9 @@ flowchart TD
 - **Exponential Backoff with Full Jitter**: Protects failing downstream databases from the Thundering Herd problem during retries:
   $$\text{Delay} = \text{Uniform}(0, \min(\text{MaxInterval}, \text{Initial} \times \text{Factor}^{\text{Attempt}}))$$
 - **Step Idempotency**: Each chunk execution is keyed with deterministic partition tokens so re-running after network failure never produces duplicate rows.
-- **Zero Dependencies for Core Engine**: Standard library Python (`sqlite3`, `json`, `dataclasses`, `time`).
+- **Zero Dependencies for Core Engine**: Standard library Python (`sqlite3`, `json`, `dataclasses`, `time`, `signal`).
+- **Graceful SIGTERM Handling**: Catches Kubernetes pod termination signals, allowing active transactions to commit to SQLite WAL before exiting cleanly with status code 0.
+- **Docker and Kubernetes Ready**: Shipped with a production non-root container, persistent volume mounts for checkpoints, and automated container health checks.
 - **Production Framework Adapters**: Includes reference implementations for both **LangGraph** (`StateGraph`, `SqliteSaver`) and **Temporal** (`@workflow.defn`, `@activity.defn`, Heartbeats).
 
 ---
@@ -199,6 +201,34 @@ TEST SUCCESSFUL! Complete crash recovery achieved!
 
 ---
 
+## Docker and Kubernetes Deployment
+
+The project includes a production container setup with non-root security, persistent volume mounts, and automated health checks.
+
+### Running with Docker Compose
+
+```bash
+# 1. Build and start the workflow worker in the background
+docker compose up --build -d
+
+# 2. View live worker logs and checkpoint commits
+docker compose logs -f workflow-worker
+
+# 3. Inspect real-time status and DLQ records from a separate container
+docker compose run --rm status-check
+
+# 4. Graceful container stop (allows active step to commit within 30s)
+docker compose stop
+```
+
+### Kubernetes Pod Lifecycle Best Practices
+
+1. **Non-Root User**: Runs under `appuser` (UID 10001) for strict Kubernetes PodSecurityStandards compliance.
+2. **Graceful Termination Window**: Shipped with `stop_grace_period: 30s`. When Kubernetes issues `SIGTERM`, the engine catches the signal, finishes the current batch, commits the checkpoint to the SQLite Write-Ahead Log, and exits cleanly with exit code 0.
+3. **Persistent Volume**: Database checkpoints are stored in the `checkpoint_data` volume, surviving pod restarts, rolling deployments, and worker rescheduling.
+
+---
+
 ## Project Structure
 
 ```text
@@ -206,16 +236,18 @@ durable-state-machine/
 ├── .github/workflows/
 │   └── ci.yml                 # Automated CI running tests across Python 3.9 - 3.12
 ├── core/
-│   └── engine.py              # Zero-dependency durable workflow engine (ACID Checkpointing, Backoff, DLQ)
+│   └── engine.py              # Zero-dependency durable workflow engine (ACID Checkpointing, Backoff, DLQ, SIGTERM)
 ├── migration_workflow.py      # 4-Hour data migration DAG (1M records, 10 partitions)
 ├── demo_crash_and_recover.py  # Interactive crash & recovery simulation script
 ├── langgraph_workflow.py      # Production LangGraph implementation (StateGraph, SqliteSaver)
 ├── temporal_workflow.py       # Production Temporal implementation (Activities, Heartbeats)
 ├── tests/
-│   └── test_engine.py         # Unit test suite verifying backoff, jitter, recovery & DLQ
+│   └── test_engine.py         # Unit test suite verifying backoff, jitter, recovery, DLQ & SIGTERM
+├── Dockerfile                 # Production container with non-root user and healthcheck
+├── docker-compose.yml         # Container orchestration with persistent volume and grace periods
 ├── requirements.txt           # Optional dependencies for LangGraph/Temporal adapters
 ├── LICENSE                    # MIT License
-└── README.md                  # Documentation, Architecture & DLQ Guide
+└── README.md                  # Documentation, Architecture & Deployment Guide
 ```
 
 ---
