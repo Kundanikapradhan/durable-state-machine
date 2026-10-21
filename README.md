@@ -2,7 +2,7 @@
 
 A production-grade, fault-tolerant workflow orchestrator designed for multi-hour data migration pipelines.
 
-Built to solve the critical flaw of naive `while True` scripts: **unhandled process termination (Kubernetes OOMKills, Spot instance terminations, rolling deploys, transient network drops) destroying in-memory state and resetting long-running jobs back to zero.**
+Built to solve the critical flaw of naive `while True` scripts: unhandled process termination (Kubernetes OOMKills, Spot instance terminations, rolling deploys, transient network drops) destroying in-memory state and resetting long-running jobs back to zero.**
 
 ---
 
