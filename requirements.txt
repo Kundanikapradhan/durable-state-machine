@@ -1,0 +1,13 @@
+# Core engine has ZERO external dependencies (uses standard library sqlite3, time, json).
+# The following dependencies are optional for running the framework-specific adapters:
+
+# Optional: LangGraph Workflow Adapter
+langgraph>=0.2.0
+langchain-core>=0.2.0
+
+# Optional: Temporal Workflow Adapter
+temporalio>=1.6.0
+
+# Development & Testing
+pytest>=7.0.0
+ruff>=0.1.0
