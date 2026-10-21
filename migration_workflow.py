@@ -16,7 +16,8 @@ from typing import Dict, Any
 from core.engine import DurableWorkflow, RetryPolicy, CheckpointStore
 
 # A control file used to trigger a simulated crash on the first run
-CRASH_TRIGGER_FILE = "/Users/kundanikapradhan/.gemini/antigravity/scratch/durable-state-machine/simulate_crash_at_batch4.flag"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CRASH_TRIGGER_FILE = os.path.join(BASE_DIR, "simulate_crash_at_batch4.flag")
 
 # Global failure toggle for transient network errors (recovers on retry)
 transient_network_failure_count = 0

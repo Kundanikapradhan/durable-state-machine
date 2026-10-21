@@ -15,7 +15,7 @@ import sys
 import os
 import time
 
-WORK_DIR = "/Users/kundanikapradhan/.gemini/antigravity/scratch/durable-state-machine"
+WORK_DIR = os.path.dirname(os.path.abspath(__file__))
 CRASH_FLAG = os.path.join(WORK_DIR, "simulate_crash_at_batch4.flag")
 DB_FILE = os.path.join(WORK_DIR, "migration_checkpoints.db")
 
