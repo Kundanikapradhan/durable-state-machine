@@ -89,11 +89,11 @@ python3 demo_crash_and_recover.py
 🛑 Process 1 Exit Code: 137 (SIGKILL / OOM)
 
 ======================================================================
- 🔄 [PHASE B] SIMULATING SERVER REBOOT & WORKER RESUMPTION
+  [PHASE B] SIMULATING SERVER REBOOT & WORKER RESUMPTION
 ======================================================================
-🔁 [Crash Recovery] Found existing run! Resuming from state after 'migrate_phase_1'.
-⏩ Skipping 3 already completed steps: ['partition_and_plan', 'validate_prerequisites', 'migrate_phase_1']
-▶️  [Executing Step] --> 'migrate_phase_2'
+ [Crash Recovery] Found existing run! Resuming from state after 'migrate_phase_1'.
+ Skipping 3 already completed steps: ['partition_and_plan', 'validate_prerequisites', 'migrate_phase_1']
+  [Executing Step] --> 'migrate_phase_2'
   -> Migrating Batch 4 (IDs 300,001 - 400,000)...
   -> Migrating Batch 5 (IDs 400,001 - 500,000)...
   -> Migrating Batch 6 (IDs 500,001 - 600,000)...
