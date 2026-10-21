@@ -8,6 +8,7 @@ Built to mirror Temporal and LangGraph's core primitives:
 3. Exponential Backoff with Full Jitter
 4. Crash Recovery (Resumes exact state from disk without re-executing finished tasks)
 5. Idempotent Step Execution
+6. Dead Letter Queue (DLQ) for Poison Pill Isolation
 """
 
 import sqlite3
@@ -15,6 +16,7 @@ import json
 import time
 import random
 import logging
+import traceback
 from typing import Callable, Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,14 +28,29 @@ logging.basicConfig(
 logger = logging.getLogger("DurableEngine")
 
 
+class DeadLetterQueueException(RuntimeError):
+    """Raised when a task exceeds maximum retry attempts and is quarantined to the DLQ."""
+    def __init__(self, workflow_id: str, step_name: str, attempts: int, original_error: str, dlq_id: Optional[int] = None):
+        super().__init__(
+            f"Workflow '{workflow_id}' step '{step_name}' exceeded {attempts} attempts and was quarantined to DLQ "
+            f"(Record #{dlq_id}). Root cause: {original_error}"
+        )
+        self.workflow_id = workflow_id
+        self.step_name = step_name
+        self.attempts = attempts
+        self.original_error = original_error
+        self.dlq_id = dlq_id
+
+
 @dataclass
 class RetryPolicy:
-    """Configures retry behavior for transient errors."""
+    """Configures retry behavior for transient errors and poison pill quarantine."""
     max_attempts: int = 5
     initial_interval: float = 1.0  # seconds
     backoff_factor: float = 2.0
     max_interval: float = 30.0
     jitter: bool = True
+    send_to_dlq: bool = True
 
     def compute_delay(self, attempt: int) -> float:
         """
@@ -52,7 +69,7 @@ class RetryPolicy:
 class CheckpointStore:
     """
     Durable persistence layer backed by SQLite with Write-Ahead Logging (WAL).
-    Guarantees ACID transactions for state commits.
+    Guarantees ACID transactions for state commits and DLQ quarantine.
     """
     def __init__(self, db_path: str = "workflow_checkpoints.db"):
         self.db_path = db_path
@@ -72,7 +89,7 @@ class CheckpointStore:
                     workflow_id TEXT NOT NULL,
                     step_name TEXT NOT NULL,
                     state_json TEXT NOT NULL,
-                    status TEXT NOT NULL, -- PENDING, COMPLETED, FAILED
+                    status TEXT NOT NULL, -- PENDING, COMPLETED, FAILED, QUARANTINED
                     attempt_count INTEGER DEFAULT 0,
                     error_message TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -88,6 +105,18 @@ class CheckpointStore:
                     event_type TEXT NOT NULL,
                     payload_json TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS dead_letter_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workflow_id TEXT NOT NULL,
+                    step_name TEXT NOT NULL,
+                    failed_payload_json TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL,
+                    error_message TEXT NOT NULL,
+                    stack_trace TEXT,
+                    quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
             conn.commit()
@@ -125,6 +154,64 @@ class CheckpointStore:
             """, (workflow_id, step_name, f"STEP_{status}", json.dumps({"attempts": attempt_count, "error": error_message})))
             conn.commit()
 
+    def send_to_dlq(
+        self,
+        workflow_id: str,
+        step_name: str,
+        state: Dict[str, Any],
+        attempt_count: int,
+        error_message: str,
+        stack_trace: Optional[str] = None
+    ) -> int:
+        """Stores a poisoned payload and stack trace in the Dead Letter Queue."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO dead_letter_queue (workflow_id, step_name, failed_payload_json, attempt_count, error_message, stack_trace)
+                VALUES (?, ?, ?, ?, ?, ?);
+            """, (
+                workflow_id,
+                step_name,
+                json.dumps(state),
+                attempt_count,
+                error_message,
+                stack_trace
+            ))
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_dlq_records(self, workflow_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Retrieves quarantined tasks from the Dead Letter Queue for inspection."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if workflow_id:
+                cursor.execute("""
+                    SELECT id, workflow_id, step_name, failed_payload_json, attempt_count, error_message, stack_trace, quarantined_at
+                    FROM dead_letter_queue
+                    WHERE workflow_id = ?
+                    ORDER BY id DESC;
+                """, (workflow_id,))
+            else:
+                cursor.execute("""
+                    SELECT id, workflow_id, step_name, failed_payload_json, attempt_count, error_message, stack_trace, quarantined_at
+                    FROM dead_letter_queue
+                    ORDER BY id DESC;
+                """)
+            rows = cursor.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "workflow_id": r[1],
+                    "step_name": r[2],
+                    "failed_payload": json.loads(r[3]),
+                    "attempt_count": r[4],
+                    "error_message": r[5],
+                    "stack_trace": r[6],
+                    "quarantined_at": r[7]
+                }
+                for r in rows
+            ]
+
     def load_latest_state(self, workflow_id: str) -> Tuple[Optional[str], Dict[str, Any], List[str]]:
         """
         Retrieves the latest completed state and list of finished steps for crash recovery.
@@ -151,6 +238,7 @@ class CheckpointStore:
         with self._get_connection() as conn:
             conn.execute("DELETE FROM checkpoints WHERE workflow_id = ?;", (workflow_id,))
             conn.execute("DELETE FROM event_log WHERE workflow_id = ?;", (workflow_id,))
+            conn.execute("DELETE FROM dead_letter_queue WHERE workflow_id = ?;", (workflow_id,))
             conn.commit()
 
 
@@ -159,11 +247,12 @@ class WorkflowStep:
     name: str
     handler: Callable[[Dict[str, Any]], Dict[str, Any]]
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    dlq_non_fatal: bool = False  # If True, quarantine to DLQ and allow downstream steps to continue
 
 
 class DurableWorkflow:
     """
-    A DAG runner with checkpoints and crash recovery.
+    A DAG runner with checkpoints, crash recovery, and Dead Letter Queue.
     Modeled on Temporal Activity Execution and LangGraph StateGraph.
     """
     def __init__(self, name: str, checkpointer: Optional[CheckpointStore] = None):
@@ -176,14 +265,16 @@ class DurableWorkflow:
         self,
         name: str,
         handler: Callable[[Dict[str, Any]], Dict[str, Any]],
-        retry_policy: Optional[RetryPolicy] = None
+        retry_policy: Optional[RetryPolicy] = None,
+        dlq_non_fatal: bool = False
     ):
         if name in self.steps:
             raise ValueError(f"Step '{name}' is already registered.")
         self.steps[name] = WorkflowStep(
             name=name,
             handler=handler,
-            retry_policy=retry_policy or RetryPolicy()
+            retry_policy=retry_policy or RetryPolicy(),
+            dlq_non_fatal=dlq_non_fatal
         )
         self.step_order.append(name)
 
@@ -198,8 +289,8 @@ class DurableWorkflow:
         latest_step, persisted_state, completed_steps = self.checkpointer.load_latest_state(workflow_id)
 
         if completed_steps:
-            logger.info(f"[Crash Recovery] Found existing run! Resuming from state after '{latest_step}'.")
-            logger.info(f"Skipping {len(completed_steps)} already completed steps: {completed_steps}")
+            logger.info(f"🔁 [Crash Recovery] Found existing run! Resuming from state after '{latest_step}'.")
+            logger.info(f"⏩ Skipping {len(completed_steps)} already completed steps: {completed_steps}")
             state = persisted_state
         else:
             logger.info("✨ Fresh run detected. Initializing state.")
@@ -216,7 +307,7 @@ class DurableWorkflow:
             attempt = 0
             step_succeeded = False
 
-            logger.info(f"  [Executing Step] --> '{step_name}'")
+            logger.info(f"▶️  [Executing Step] --> '{step_name}'")
 
             while not step_succeeded:
                 attempt += 1
@@ -238,26 +329,61 @@ class DurableWorkflow:
                         attempt_count=attempt
                     )
                     step_succeeded = True
-                    logger.info(f" [Step Completed & Checkpointed] '{step_name}' (Attempt {attempt})")
+                    logger.info(f"✅ [Step Completed & Checkpointed] '{step_name}' (Attempt {attempt})")
 
                 except Exception as ex:
-                    logger.warning(f" [Error in Step '{step_name}'] Attempt {attempt}/{policy.max_attempts}: {str(ex)}")
+                    logger.warning(f"⚠️  [Error in Step '{step_name}'] Attempt {attempt}/{policy.max_attempts}: {str(ex)}")
 
                     if attempt >= policy.max_attempts:
+                        tb = traceback.format_exc()
+                        dlq_id = None
+                        status = "FAILED"
+
+                        if policy.send_to_dlq:
+                            dlq_id = self.checkpointer.send_to_dlq(
+                                workflow_id=workflow_id,
+                                step_name=step_name,
+                                state=state,
+                                attempt_count=attempt,
+                                error_message=str(ex),
+                                stack_trace=tb
+                            )
+                            status = "QUARANTINED"
+                            logger.critical(
+                                f"🚨 [Poison Pill Quarantined to DLQ #{dlq_id}] Step '{step_name}' "
+                                f"failed permanently after {attempt} attempts."
+                            )
+                        else:
+                            logger.critical(f"❌ [Max Retries Exceeded] Step '{step_name}' failed permanently.")
+
                         self.checkpointer.save_checkpoint(
                             workflow_id=workflow_id,
                             step_name=step_name,
                             state=state,
-                            status="FAILED",
+                            status=status,
                             attempt_count=attempt,
                             error_message=str(ex)
                         )
-                        logger.critical(f" [Max Retries Exceeded] Step '{step_name}' failed permanently.")
-                        raise RuntimeError(f"Workflow '{workflow_id}' failed at step '{step_name}': {ex}") from ex
+
+                        if step.dlq_non_fatal:
+                            logger.warning(
+                                f"⚠️ Step '{step_name}' marked non-fatal. Bypassing and continuing downstream workflow..."
+                            )
+                            state[f"{step_name}_quarantined"] = True
+                            state[f"{step_name}_dlq_id"] = dlq_id
+                            break
+                        else:
+                            raise DeadLetterQueueException(
+                                workflow_id=workflow_id,
+                                step_name=step_name,
+                                attempts=attempt,
+                                original_error=str(ex),
+                                dlq_id=dlq_id
+                            ) from ex
 
                     delay = policy.compute_delay(attempt)
                     logger.info(f"⏳ Backing off for {delay:.2f}s before retry #{attempt + 1}...")
                     time.sleep(delay)
 
-        logger.info(f" === Workflow '{self.name}' (ID: {workflow_id}) COMPLETED SUCCESSFULLY ===")
+        logger.info(f"🎉 === Workflow '{self.name}' (ID: {workflow_id}) COMPLETED SUCCESSFULLY ===")
         return state
