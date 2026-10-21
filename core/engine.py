@@ -94,9 +94,14 @@ class CheckpointStore:
                     error_message TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at_ts REAL DEFAULT 0.0,
                     PRIMARY KEY (workflow_id, step_name)
                 );
             """)
+            try:
+                conn.execute("ALTER TABLE checkpoints ADD COLUMN updated_at_ts REAL DEFAULT 0.0;")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS event_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,23 +135,26 @@ class CheckpointStore:
         attempt_count: int = 0,
         error_message: Optional[str] = None
     ):
+        now_ts = time.time()
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO checkpoints (workflow_id, step_name, state_json, status, attempt_count, error_message, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO checkpoints (workflow_id, step_name, state_json, status, attempt_count, error_message, updated_at, updated_at_ts)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
                 ON CONFLICT(workflow_id, step_name) DO UPDATE SET
                     state_json = excluded.state_json,
                     status = excluded.status,
                     attempt_count = excluded.attempt_count,
                     error_message = excluded.error_message,
-                    updated_at = CURRENT_TIMESTAMP;
+                    updated_at = CURRENT_TIMESTAMP,
+                    updated_at_ts = excluded.updated_at_ts;
             """, (
                 workflow_id,
                 step_name,
                 json.dumps(state),
                 status,
                 attempt_count,
-                error_message
+                error_message,
+                now_ts
             ))
             conn.execute("""
                 INSERT INTO event_log (workflow_id, step_name, event_type, payload_json)
@@ -212,16 +220,17 @@ class CheckpointStore:
                 for r in rows
             ]
 
-    def load_latest_state(self, workflow_id: str) -> Tuple[Optional[str], Dict[str, Any], List[str]]:
+    def load_latest_state(self, workflow_id: str, step_order: Optional[List[str]] = None) -> Tuple[Optional[str], Dict[str, Any], List[str]]:
         """
         Retrieves the latest completed state and list of finished steps for crash recovery.
+        If step_order is provided, selects the latest state according to the DAG's topological sequence.
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT step_name, state_json, status FROM checkpoints
                 WHERE workflow_id = ? AND status = 'COMPLETED'
-                ORDER BY updated_at ASC;
+                ORDER BY updated_at_ts ASC, updated_at ASC;
             """, (workflow_id,))
             rows = cursor.fetchall()
 
@@ -229,8 +238,18 @@ class CheckpointStore:
                 return None, {}, []
 
             completed_steps = [r[0] for r in rows]
-            latest_state = json.loads(rows[-1][1])
-            latest_step = rows[-1][0]
+            step_to_state = {r[0]: json.loads(r[1]) for r in rows}
+
+            if step_order:
+                latest_step = None
+                for s in step_order:
+                    if s in step_to_state:
+                        latest_step = s
+                latest_state = step_to_state[latest_step] if latest_step else json.loads(rows[-1][1])
+            else:
+                latest_step = rows[-1][0]
+                latest_state = json.loads(rows[-1][1])
+
             return latest_step, latest_state, completed_steps
 
     def clear(self, workflow_id: str):
@@ -286,7 +305,9 @@ class DurableWorkflow:
         logger.info(f"=== Starting / Resuming Workflow '{self.name}' (ID: {workflow_id}) ===")
 
         # 1. Crash Recovery check
-        latest_step, persisted_state, completed_steps = self.checkpointer.load_latest_state(workflow_id)
+        latest_step, persisted_state, completed_steps = self.checkpointer.load_latest_state(
+            workflow_id, step_order=self.step_order
+        )
 
         if completed_steps:
             logger.info(f"🔁 [Crash Recovery] Found existing run! Resuming from state after '{latest_step}'.")
