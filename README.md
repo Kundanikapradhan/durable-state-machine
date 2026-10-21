@@ -153,22 +153,6 @@ python3 -m unittest discover tests
 | **Hosting** | Temporal Cloud or Self-hosted Temporal Server (Go) | Embedded Python library or LangGraph Cloud |
 
 ---
-
-## 💼 Interview Talking Points & System Design
-
-Use this project to showcase senior engineering principles in backend or AI interviews:
-
-1. **Why not just use Celery or a Cron job?**  
-   *Celery and Cron handle task queues and scheduling, but lack native durable state machines. If a Celery worker dies during hour 3 of a 4-hour job, it loses all in-memory progress and must restart from scratch. Our durable state machine uses checkpoints to ensure deterministic recovery from the exact step that failed.*
-
-2. **How is idempotency preserved upon retry?**  
-   *All batch writes use upserts (`ON CONFLICT DO UPDATE`) keyed on deterministic composite partition tokens. If a worker crashes right after writing to the database but before committing the checkpoint, re-running that batch produces zero duplicate records.*
-
-3. **Why full jitter on exponential backoff?**  
-   *Plain exponential backoff causes retries to cluster in synchronized waves. Full jitter introduces uniform randomness across the backoff window, flattening traffic spikes and giving downstream databases room to recover.*
-
----
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
