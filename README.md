@@ -1,10 +1,4 @@
-# Durable State Machine Workflow 🛡️
-
-[![CI](https://github.com/placeholder-user/durable-state-machine/actions/workflows/ci.yml/badge.svg)](https://github.com)
-[![Python](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Architecture: DAG](https://img.shields.io/badge/Architecture-State%20Machine%20DAG-orange.svg)](#architecture-overview)
-[![Fault Tolerance: ACID WAL](https://img.shields.io/badge/Checkpoints-SQLite%20WAL-success.svg)](#how-it-works)
+# Durable State Machine Workflow
 
 A production-grade, fault-tolerant workflow orchestrator designed for multi-hour data migration pipelines.
 
@@ -12,7 +6,7 @@ Built to solve the critical flaw of naive `while True` scripts: **unhandled proc
 
 ---
 
-## 🎯 Architecture Overview
+## Architecture Overview
 
 ```mermaid
 flowchart TD
@@ -49,7 +43,7 @@ flowchart TD
 
 ---
 
-## 💡 Key Highlights
+## Key Highlights
 
 - **Durable Checkpointing**: Atomically snapshots state after every DAG node using SQLite with Write-Ahead Logging (`PRAGMA journal_mode=WAL;`).
 - **Crash Recovery**: If the OS process dies (`os._exit(137)`), restarting the workflow skips all committed steps and resumes the unfinished task from disk.
@@ -61,7 +55,7 @@ flowchart TD
 
 ---
 
-## 🚀 Quickstart
+## Quickstart
 
 Clone the repo and run the automated crash-and-recovery test:
 
@@ -76,7 +70,7 @@ python3 demo_crash_and_recover.py
 ### Live Test Output
 ```text
 ======================================================================
- 🚀 DURABLE STATE MACHINE WORKFLOW DEMO: CRASH & RECOVERY TEST
+ DURABLE STATE MACHINE WORKFLOW DEMO: CRASH & RECOVERY TEST
 ======================================================================
 
 [PHASE A] Starting fresh workflow with simulated fatal crash trigger...
@@ -89,7 +83,7 @@ python3 demo_crash_and_recover.py
      [Batch 2 Committed] Cumulative: 200,000 records.
      [Batch 3 Committed] Cumulative: 300,000 records.
 [Step 4] Processing Batches 4 to 6 (Records 300,001 - 600,000)...
-  💥 [Simulated Transient Network Drop] Target DB connection reset!
+   [Simulated Transient Network Drop] Target DB connection reset!
   ⏳ Backing off for 0.17s before retry #2...
 💀 [SIMULATED DISASTER] Process crashed / killed mid-migration during Phase 2!
 🛑 Process 1 Exit Code: 137 (SIGKILL / OOM)
@@ -113,7 +107,7 @@ python3 demo_crash_and_recover.py
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 durable-state-machine/
@@ -134,7 +128,7 @@ durable-state-machine/
 
 ---
 
-## 🧪 Running Unit Tests
+## Running Unit Tests
 
 ```bash
 python3 -m unittest discover tests
@@ -142,7 +136,7 @@ python3 -m unittest discover tests
 
 ---
 
-## 🧠 Framework Comparison: Temporal vs. LangGraph
+## Framework Comparison: Temporal vs. LangGraph
 
 | Feature | Temporal | LangGraph |
 | :--- | :--- | :--- |
@@ -153,6 +147,6 @@ python3 -m unittest discover tests
 | **Hosting** | Temporal Cloud or Self-hosted Temporal Server (Go) | Embedded Python library or LangGraph Cloud |
 
 ---
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
