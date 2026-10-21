@@ -198,8 +198,8 @@ class DurableWorkflow:
         latest_step, persisted_state, completed_steps = self.checkpointer.load_latest_state(workflow_id)
 
         if completed_steps:
-            logger.info(f"🔁 [Crash Recovery] Found existing run! Resuming from state after '{latest_step}'.")
-            logger.info(f"⏩ Skipping {len(completed_steps)} already completed steps: {completed_steps}")
+            logger.info(f"[Crash Recovery] Found existing run! Resuming from state after '{latest_step}'.")
+            logger.info(f"Skipping {len(completed_steps)} already completed steps: {completed_steps}")
             state = persisted_state
         else:
             logger.info("✨ Fresh run detected. Initializing state.")
@@ -216,7 +216,7 @@ class DurableWorkflow:
             attempt = 0
             step_succeeded = False
 
-            logger.info(f"▶️  [Executing Step] --> '{step_name}'")
+            logger.info(f"  [Executing Step] --> '{step_name}'")
 
             while not step_succeeded:
                 attempt += 1
@@ -238,10 +238,10 @@ class DurableWorkflow:
                         attempt_count=attempt
                     )
                     step_succeeded = True
-                    logger.info(f"✅ [Step Completed & Checkpointed] '{step_name}' (Attempt {attempt})")
+                    logger.info(f" [Step Completed & Checkpointed] '{step_name}' (Attempt {attempt})")
 
                 except Exception as ex:
-                    logger.warning(f"⚠️  [Error in Step '{step_name}'] Attempt {attempt}/{policy.max_attempts}: {str(ex)}")
+                    logger.warning(f" [Error in Step '{step_name}'] Attempt {attempt}/{policy.max_attempts}: {str(ex)}")
 
                     if attempt >= policy.max_attempts:
                         self.checkpointer.save_checkpoint(
@@ -252,12 +252,12 @@ class DurableWorkflow:
                             attempt_count=attempt,
                             error_message=str(ex)
                         )
-                        logger.critical(f"❌ [Max Retries Exceeded] Step '{step_name}' failed permanently.")
+                        logger.critical(f" [Max Retries Exceeded] Step '{step_name}' failed permanently.")
                         raise RuntimeError(f"Workflow '{workflow_id}' failed at step '{step_name}': {ex}") from ex
 
                     delay = policy.compute_delay(attempt)
                     logger.info(f"⏳ Backing off for {delay:.2f}s before retry #{attempt + 1}...")
                     time.sleep(delay)
 
-        logger.info(f"🎉 === Workflow '{self.name}' (ID: {workflow_id}) COMPLETED SUCCESSFULLY ===")
+        logger.info(f" === Workflow '{self.name}' (ID: {workflow_id}) COMPLETED SUCCESSFULLY ===")
         return state
